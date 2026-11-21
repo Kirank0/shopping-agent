@@ -1,5 +1,6 @@
 import sqlite3
 import os
+from contextlib import closing
 
 DB_PATH = os.getenv(
     "DB_PATH", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "resources", "store.db"))
@@ -8,7 +9,13 @@ DB_PATH = os.getenv(
 
 def create_database():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    # closing() guarantees conn.close() runs even if a query raises.
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        _create_and_seed(conn)
+    print(f"Database created at: {DB_PATH}")
+
+
+def _create_and_seed(conn):
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -213,8 +220,6 @@ def create_database():
     )
 
     conn.commit()
-    conn.close()
-    print(f"Database created at: {DB_PATH}")
 
 
 if __name__ == "__main__":
