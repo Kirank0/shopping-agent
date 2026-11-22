@@ -3,13 +3,11 @@ Reviews API — reads from the `reviews` table in store.db and returns
 aggregated rating information for products.
 """
 
-import sqlite3
 import os
+import sqlite3
 from contextlib import closing
 
-DB_PATH = os.getenv(
-    "DB_PATH", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "resources", "store.db"))
-)
+DB_PATH = os.getenv("DB_PATH", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "resources", "store.db")))
 
 
 def get_product_rating(product_id: int) -> dict:
@@ -50,7 +48,7 @@ def get_ratings_for_products(product_ids: list[int]) -> list[dict]:
         {
             "product_id": pid,
             "average_rating": ratings_map.get(pid, {}).get("average_rating", 0.0),
-            "review_count":   ratings_map.get(pid, {}).get("review_count", 0),
+            "review_count": ratings_map.get(pid, {}).get("review_count", 0),
         }
         for pid in product_ids
     ]
