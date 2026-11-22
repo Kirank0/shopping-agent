@@ -1,0 +1,175 @@
+# CI/CD for the shopping agent.
+#
+#   Pull request -> master : lint, unit + integration + end-to-end tests (fake LLM), Docker build,
+#                            container health check, Playwright browser tests against the container.
+#   Push to master         : all of the above + live tests against the real Groq model,
+#                            then publish the production image to GitHub Container Registry:
+#                              ghcr.io/<owner>/shopping-agent:latest  and  :sha-<commit>
+#
+# Secrets: GROQ_API_KEY (optional; live tests are skipped without it). Never used on pull requests.
+
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.13.9" # same as the Dockerfile
+  PYTHON_VERSION: "3.12" # same as the Docker base image
+
+jobs:
+  test:
+    name: Lint, unit, integration & app tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Unit, integration and end-to-end (AppTest) tests
+        run: uv run pytest -m "not live and not browser" --cov=src --cov-report=term-missing -v
+
+      - name: Check requirements.txt matches uv.lock
+        run: |
+          uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt
+          git diff --exit-code requirements.txt || {
+            echo "::error::requirements.txt is out of date. Run: uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt"
+            exit 1
+          }
+
+  docker:
+    name: Docker build, browser tests & publish
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUBLISH: ${{ github.ref == 'refs/heads/master' && github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Image name (registry names must be lowercase)
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: |
+            shopping-agent:ci
+            ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start container (dummy API key)
+        run: |
+          docker run -d --name app -p 8501:8501 -e GROQ_API_KEY=dummy shopping-agent:ci
+          ./.github/scripts/wait-for-health.sh app
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - name: Install test dependencies and Chromium
+        run: |
+          uv sync --locked
+          uv run playwright install --with-deps chromium
+
+      - name: Browser end-to-end tests
+        env:
+          E2E_BASE_URL: http://localhost:8501
+        run: uv run pytest -m "browser and not live" -v --tracing=retain-on-failure --output=test-results/browser
+
+      - name: Restart container with the real API key
+        if: env.PUBLISH == 'true'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          docker rm -f app
+          docker run -d --name app -p 8501:8501 -e GROQ_API_KEY shopping-agent:ci
+          ./.github/scripts/wait-for-health.sh app
+
+      - name: Live tests (real Groq model)
+        if: env.PUBLISH == 'true'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          RUN_LIVE: "1"
+          E2E_BASE_URL: http://localhost:8501
+        run: |
+          if [ -z "$GROQ_API_KEY" ]; then
+            echo "::warning::GROQ_API_KEY secret is not set; live tests will be skipped."
+          fi
+          uv run pytest -m live -v -rs --tracing=retain-on-failure --output=test-results/live
+
+      - name: Container logs
+        if: always()
+        run: docker logs app || true
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: test-results/
+          if-no-files-found: ignore
+
+      - name: Log in to GitHub Container Registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish production image
+        if: env.PUBLISH == 'true'
+        run: |
+          docker push --all-tags "$IMAGE"
+          {
+            echo "### Production image published"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

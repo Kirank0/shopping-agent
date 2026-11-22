@@ -5,3 +5,8 @@ resources/
 **/__pycache__
 *.pyc
 *.db
+tests/
+.github/
+.pytest_cache
+.ruff_cache
+test-results/

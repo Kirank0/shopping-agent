@@ -4,7 +4,6 @@ Streamlit chat UI for the shopping agent.
 Run from the project root:  uv run streamlit run src/app.py
 """
 
-import json
 import os
 from pathlib import Path
 
@@ -14,9 +13,10 @@ from dotenv import load_dotenv
 # Load .env before importing modules that read environment variables at import time.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
+from langchain_core.messages import HumanMessage  # noqa: E402
 
 from agent import build_agent  # noqa: E402
+from chat_ui import render_history, show_markdown  # noqa: E402
 from setup_db import DB_PATH, create_database  # noqa: E402
 
 EXAMPLES = [
@@ -36,39 +36,6 @@ def get_agent():
     if not os.path.exists(DB_PATH):
         create_database()
     return build_agent()
-
-
-def message_text(message) -> str:
-    text = message.text
-    return text() if callable(text) else text
-
-
-def show_markdown(text: str) -> None:
-    # Escape "$" so Streamlit doesn't render prices like "$9.99 and $12.99" as LaTeX.
-    st.markdown(text.replace("$", "\\$"))
-
-
-def render_history(messages) -> None:
-    tool_calls = []
-    for message in messages:
-        if isinstance(message, HumanMessage):
-            with st.chat_message("user"):
-                show_markdown(message_text(message))
-            tool_calls = []
-        elif isinstance(message, AIMessage):
-            if message.tool_calls:
-                tool_calls.extend(message.tool_calls)
-                continue
-            text = message_text(message)
-            if not text:
-                continue
-            with st.chat_message("assistant"):
-                if tool_calls:
-                    with st.expander(f"🔧 {len(tool_calls)} tool call(s)"):
-                        for call in tool_calls:
-                            st.code(f"{call['name']}({json.dumps(call['args'])})", language="python")
-                show_markdown(text)
-            tool_calls = []
 
 
 if "messages" not in st.session_state:

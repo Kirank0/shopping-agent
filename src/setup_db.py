@@ -1,10 +1,8 @@
-import sqlite3
 import os
+import sqlite3
 from contextlib import closing
 
-DB_PATH = os.getenv(
-    "DB_PATH", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "resources", "store.db"))
-)
+DB_PATH = os.getenv("DB_PATH", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "resources", "store.db")))
 
 
 def create_database():
@@ -51,6 +49,7 @@ def _create_and_seed(conn):
         )
     """)
 
+    # fmt: off
     products = [
         # --- Honey (8) ---
         (1,  "Organic Raw Honey",            "honey",        14.99, "Pure organic raw honey, unfiltered and cold-pressed",                1),
@@ -213,6 +212,7 @@ def _create_and_seed(conn):
         (32, 3.5, "Yosef",  "Slightly thin but good for cereal."),
         (32, 3.5, "Zola",   "Decent soy milk, nothing special."),
     ]
+    # fmt: on
     cursor.execute("DELETE FROM reviews")
     cursor.executemany(
         "INSERT INTO reviews (product_id, rating, reviewer_name, review_text) VALUES (?, ?, ?, ?)",
